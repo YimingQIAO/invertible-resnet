@@ -18,7 +18,7 @@ dataset = 'cifar10'
 for coeff in coeffs:
     cmd.append('python CIFAR_main.py --original_resnet {original} --epochs 20 --nBlocks 16 16 16 --nStrides 1 2 2 --nChannels 512 512 512 --coeff {coeff} -densityEstimation -multiScale --lr 0.003 --weight_decay 0. --numSeriesTerms 5 --dataset cifar10 --batch 128 --warmup_epochs 1 --save_dir ./results/density_estimation_cifar_coeff{coeff}_orig{original}_0619'.format(coeff=coeff, original=1) + ' --GPUs 0 1 2 3')
     
-    cmd.append('python CIFAR_main.py --original_resnet {original} --epochs 20 --nBlocks 16 16 16 --nStrides 1 2 2 --nChannels 512 512 512 --coeff {coeff} -densityEstimation -multiScale --lr 0.003 --weight_decay 0. --numSeriesTerms 5 --dataset cifar10 --batch 128 --warmup_epochs 1 --save_dir ./results/density_estimation_cifar_coeff{coeff}_orig{original}_0619'.format(coeff=coeff, original=0) + ' --GPUs 4 5 6 7')
+#     cmd.append('python CIFAR_main.py --original_resnet {original} --epochs 20 --nBlocks 16 16 16 --nStrides 1 2 2 --nChannels 512 512 512 --coeff {coeff} -densityEstimation -multiScale --lr 0.003 --weight_decay 0. --numSeriesTerms 5 --dataset cifar10 --batch 128 --warmup_epochs 1 --save_dir ./results/density_estimation_cifar_coeff{coeff}_orig{original}_0619'.format(coeff=coeff, original=0) + ' --GPUs 4 5 6 7')
     
 #     cmd.append('python ./CIFAR_main.py -densityEstimation --epochs 2 --nBlocks {nBlocks} {nBlocks} {nBlocks} --nStrides 1 2 2 --nChannels 32 64 128 --coeff {coeff} --batch 128 --dataset {dataset} --init_ds 1 --inj_pad 13 --powerIterSpectralNorm 1 --save_dir ./results/classication_dataset{dataset}_coeff{coeff}_nBlocks{nBlocks} --nonlin elu --optimizer sgd'.format(nBlocks=nBlocks, coeff=coeff, dataset=dataset) + ' --GPUs {}')
 

@@ -23,7 +23,15 @@ from models.utils_cifar import train, test, std, mean, get_hms, interpolate
 from models.conv_iResNet import conv_iResNet as iResNet
 from models.conv_iResNet import multiscale_conv_iResNet as multiscale_iResNet
 
+# os.environ['MKL_SERVICE_FORCE_INTEL'] = '1'
+
 parser = argparse.ArgumentParser(description='Train i-ResNet/ResNet on Cifar')
+
+# 20200617, this is used to select gpus for running.
+parser.add_argument('--GPUs', nargs='+', type=int, default=[0])
+# 20200619, use resnet or i-resnet
+parser.add_argument('--original_resnet', type=int, default=0)
+
 parser.add_argument('-densityEstimation', '--densityEstimation', dest='densityEstimation',
                     action='store_true', help='perform density estimation')
 parser.add_argument('--optimizer', default="adamax", type=str, help="optimizer", choices=["adam", "adamax", "sgd"])
@@ -63,14 +71,14 @@ parser.add_argument('-noActnorm', '--noActnorm', dest='noActnorm', action='store
                     help='disable actnorm, default uses actnorm')
 parser.add_argument('--nonlin', default="elu", type=str, choices=["relu", "elu", "sorting", "softplus"])
 parser.add_argument('--dataset', default='cifar10', type=str, help='dataset')
-parser.add_argument('--save_dir', default=None, type=str, help='directory to save results')
+parser.add_argument('--save_dir', default="results/" + str(int(time.time())), type=str, help='directory to save results')
 parser.add_argument('--vis_port', default=8097, type=int, help="port for visdom")
 parser.add_argument('--vis_server', default="localhost", type=str, help="server for visdom")
 parser.add_argument('--log_every', default=10, type=int, help='logs every x iters')
 parser.add_argument('-log_verbose', '--log_verbose', dest='log_verbose', action='store_true',
                     help='verbose logging: sigmas, max gradient')
-parser.add_argument('-deterministic', '--deterministic', dest='deterministic', action='store_true',
-                    help='fix random seeds and set cuda deterministic')
+parser.add_argument('-deterministic', '--deterministic', dest='deterministic', action='store_true', help='fix random seeds and set cuda deterministic')
+
 
 
 def try_make_dir(d):
@@ -112,25 +120,25 @@ def test_spec_norm(model, in_shapes, extension):
     print(len(in_shapes))
     svs = [] 
     for param in params:
-      if i == 0:
-        input_shape = in_shapes[j]
-      else:
-        input_shape = in_shapes[j]
-        input_shape[1] = int(input_shape[1] // 4)
+        if i == 0:
+            input_shape = in_shapes[j]
+        else:
+            input_shape = in_shapes[j]
+            input_shape[1] = int(input_shape[1] // 4)
 
-      convKernel = model.module.state_dict()[param].cpu().numpy()
-      input_shape = input_shape[2:]
-      fft_coeff = np.fft.fft2(convKernel, input_shape, axes=[2, 3])
-      t_fft_coeff = np.transpose(fft_coeff)
-      U, D, V = np.linalg.svd(t_fft_coeff, compute_uv=True, full_matrices=False)
-      Dflat = np.sort(D.flatten())[::-1] 
-      print("Layer "+str(j)+" Singular Value "+str(Dflat[0]))
-      svs.append(Dflat[0])
-      if i == 2:
-        i = 0
-        j+= 1
-      else:
-        i+=1
+        convKernel = model.module.state_dict()[param].cpu().numpy()
+        input_shape = input_shape[2:]
+        fft_coeff = np.fft.fft2(convKernel, input_shape, axes=[2, 3])
+        t_fft_coeff = np.transpose(fft_coeff)
+        U, D, V = np.linalg.svd(t_fft_coeff, compute_uv=True, full_matrices=False)
+        Dflat = np.sort(D.flatten())[::-1] 
+        print("Layer "+str(j)+" Singular Value "+str(Dflat[0]))
+        svs.append(Dflat[0])
+        if i == 2:
+            i = 0
+            j+= 1
+        else:
+            i+=1
     np.save('singular_values'+extension, svs)
     return
 
@@ -152,7 +160,14 @@ def get_init_batch(dataloader, batch_size):
 
 def main():
     args = parser.parse_args()
+    
+    # 20200617 select gpus for running
+    print(args.GPUs)
+    assert len(args.GPUs) >= 1, "At least one gpu need to be set"
+    gpu_main = 'cuda:%d' % args.GPUs[0]
+    torch.cuda.set_device(torch.device(gpu_main))
 
+    # set the seed and make network determinstic
     if args.deterministic:
         print("MODEL NOT FULLY DETERMINISTIC")
         torch.manual_seed(1234)
@@ -167,7 +182,7 @@ def main():
         lambda x: x - 0.5
     ]
     if args.dataset == 'mnist':
-        assert args.densityEstimation, "Currently mnist is only supported for density estimation"
+        # assert args.densityEstimation, "Currently mnist is only supported for density estimation"
         mnist_transforms = [transforms.Pad(2, 0), transforms.ToTensor(), lambda x: x.repeat((3, 1, 1))]
         transform_train_mnist = transforms.Compose(mnist_transforms + dens_est_chain)
         transform_test_mnist = transforms.Compose(mnist_transforms + dens_est_chain)
@@ -243,7 +258,8 @@ def main():
                                        args.powerIterSpectralNorm,
                                        actnorm=(not args.noActnorm),
                                        learn_prior=(not args.fixedPrior),
-                                       nonlin=args.nonlin)
+                                       nonlin=args.nonlin, 
+                                       original_resnet=args.original_resnet)
         else:
             model = iResNet(nBlocks=args.nBlocks, nStrides=args.nStrides,
                             nChannels=args.nChannels, nClasses=args.nClasses,
@@ -257,7 +273,8 @@ def main():
                             density_estimation=args.densityEstimation,
                             actnorm=(not args.noActnorm),
                             learn_prior=(not args.fixedPrior),
-                            nonlin=args.nonlin)
+                            nonlin=args.nonlin,
+                            original_resnet=args.original_resnet)
         return model
 
     model = get_model(args)
@@ -271,7 +288,9 @@ def main():
     use_cuda = torch.cuda.is_available()
     if use_cuda:
         model.cuda()
-        model = torch.nn.DataParallel(model, range(torch.cuda.device_count()))
+        # model = torch.nn.DataParallel(model, range(torch.cuda.device_count()))
+        model = torch.nn.DataParallel(model, args.GPUs)
+        # model = torch.nn.DataParallel(model, [0])
         cudnn.benchmark = True
         in_shapes = model.module.get_in_shapes()
     else:
@@ -332,7 +351,7 @@ def main():
         optimizer = optim.SGD(model.parameters(), lr=args.lr,
                               momentum=0.9, weight_decay=args.weight_decay, nesterov=args.nesterov)
 
-    with open(os.path.join(args.save_dir, 'params.txt'), 'w') as f:
+    with open(os.path.join(args.save_dir, 'params.json'), 'w') as f:
         f.write(json.dumps(args.__dict__))
 
     train_log = open(os.path.join(args.save_dir, "train_log.txt"), 'w')

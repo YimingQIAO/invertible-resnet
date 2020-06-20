@@ -56,7 +56,7 @@ def downsample_shape(shape):
 class conv_iresnet_block(nn.Module):
     def __init__(self, in_shape, int_ch, numTraceSamples=0, numSeriesTerms=0,
                  stride=1, coeff=.97, input_nonlin=True,
-                 actnorm=True, n_power_iter=5, nonlin="elu"):
+                 actnorm=True, n_power_iter=5, nonlin="elu", original_resnet=0):
         """
         buid invertible bottleneck block
         :param in_shape: shape of the input (channels, height, width)
@@ -91,17 +91,29 @@ class conv_iresnet_block(nn.Module):
             layers.append(nonlin())
 
         in_ch = in_ch * stride**2
-        kernel_size1 = 3 # kernel size for first conv
-        layers.append(self._wrapper_spectral_norm(nn.Conv2d(in_ch, int_ch, kernel_size=kernel_size1, stride=1, padding=1),
-                                                  (in_ch, h, w), kernel_size1))
-        layers.append(nonlin())
-        kernel_size2 = 1 # kernel size for second conv
-        layers.append(self._wrapper_spectral_norm(nn.Conv2d(int_ch, int_ch, kernel_size=kernel_size2, padding=0),
-                                                  (int_ch, h, w), kernel_size2))
-        layers.append(nonlin())
-        kernel_size3 = 3 # kernel size for third conv
-        layers.append(self._wrapper_spectral_norm(nn.Conv2d(int_ch, in_ch, kernel_size=kernel_size3, padding=1),
-                                                  (int_ch, h, w), kernel_size3))
+        # original resnet or i-resnet
+        if original_resnet == 0:
+            kernel_size1 = 3 # kernel size for first conv
+            layers.append(self._wrapper_spectral_norm(nn.Conv2d(in_ch, int_ch, kernel_size=kernel_size1, stride=1, padding=1),
+                                                      (in_ch, h, w), kernel_size1))
+            layers.append(nonlin())
+            kernel_size2 = 1 # kernel size for second conv
+            layers.append(self._wrapper_spectral_norm(nn.Conv2d(int_ch, int_ch, kernel_size=kernel_size2, padding=0),
+                                                      (int_ch, h, w), kernel_size2))
+            layers.append(nonlin())
+            kernel_size3 = 3 # kernel size for third conv
+            layers.append(self._wrapper_spectral_norm(nn.Conv2d(int_ch, in_ch, kernel_size=kernel_size3, padding=1),
+                                                      (int_ch, h, w), kernel_size3))
+        else:
+            kernel_size1 = 3 # kernel size for first conv
+            layers.append(nn.Conv2d(in_ch, int_ch, kernel_size=kernel_size1, stride=1, padding=1))
+            layers.append(nonlin())
+            kernel_size2 = 1 # kernel size for second conv
+            layers.append(nn.Conv2d(int_ch, int_ch, kernel_size=kernel_size2, padding=0))
+            layers.append(nonlin())
+            kernel_size3 = 3 # kernel size for third conv
+            layers.append(nn.Conv2d(int_ch, in_ch, kernel_size=kernel_size3, padding=1))
+            
         self.bottleneck_block = nn.Sequential(*layers)
         if actnorm:
             self.actnorm = ActNorm2D(in_ch)
@@ -158,9 +170,10 @@ class conv_iresnet_block(nn.Module):
 class scale_block(nn.Module):
     def __init__(self, steps, in_shape, int_dim, squeeze=True, n_terms=0, n_samples=0,
                  coeff=.9, input_nonlin=True, actnorm=True, split=True,
-                 n_power_iter=5, nonlin="relu"):
+                 n_power_iter=5, nonlin="relu", original_resnet=0):
         super(scale_block, self).__init__()
         self.in_shape = in_shape
+        self.original_resnet = original_resnet
         if squeeze:
             self.squeeze = Squeeze(2)
             conv_shape = downsample_shape(in_shape)
@@ -179,18 +192,19 @@ class scale_block(nn.Module):
             self.out_shapes = [conv_shape]
 
         self.stack = self._make_stack(steps, n_terms, n_samples, conv_shape, int_dim,
-                                      input_nonlin, coeff, actnorm, n_power_iter, nonlin)
+                                      input_nonlin, coeff, actnorm, n_power_iter, nonlin, self.original_resnet)
 
     @staticmethod
     def _make_stack(steps, n_terms, n_samples, in_shape, int_dim,
-                    input_nonlin, coeff, actnorm, n_power_iter, nonlin):
+                    input_nonlin, coeff, actnorm, n_power_iter, nonlin, original_resnet):
         """ Create stack of iresnet blocks """
         block_list = nn.ModuleList()
+        if original_resnet == 0:
+            print("Constructing iResnet.")
+        else:
+            print("Constructing original Resnet.")
         for i in range(steps):
-            block_list.append(conv_iresnet_block(in_shape, int_dim, n_samples, n_terms,
-                                                 stride=1, input_nonlin=True if input_nonlin else i > 0,
-                                                 coeff=coeff, actnorm=actnorm,
-                                                 n_power_iter=n_power_iter, nonlin=nonlin))
+            block_list.append(conv_iresnet_block(in_shape, int_dim, n_samples, n_terms, stride=1, input_nonlin=True if input_nonlin else i > 0, coeff=coeff, actnorm=actnorm, n_power_iter=n_power_iter, nonlin=nonlin, original_resnet=original_resnet))
 
         return block_list
 
@@ -235,7 +249,7 @@ class multiscale_conv_iResNet(nn.Module):
                  coeff=.9, density_estimation=False, nClasses=None,
                  numTraceSamples=1, numSeriesTerms=1,
                  n_power_iter=5,
-                 actnorm=True, learn_prior=True, nonlin="relu"):
+                 actnorm=True, learn_prior=True, nonlin="relu", original_resnet=0):
         super(multiscale_conv_iResNet, self).__init__()
         assert len(nBlocks) == len(nStrides) == len(nChannels)
         if init_squeeze:
@@ -259,10 +273,10 @@ class multiscale_conv_iResNet(nn.Module):
         self.numTraceSamples = numTraceSamples if density_estimation else 0
         self.numSeriesTerms = numSeriesTerms if density_estimation else 0
         self.n_power_iter = n_power_iter
+        self.original_resnet = original_resnet
 
         self.stack, self.in_shapes = self._make_stack(in_shape, nBlocks,
-                                                      nStrides, nChannels, numSeriesTerms, numTraceSamples,
-                                                      coeff, actnorm, n_power_iter, nonlin)
+                                                      nStrides, nChannels, numSeriesTerms, numTraceSamples, coeff, actnorm, n_power_iter, nonlin)
         # make prior distribution
         self._make_prior(learn_prior)
         # make classifier
@@ -294,7 +308,8 @@ class multiscale_conv_iResNet(nn.Module):
                                 coeff, i > 0, actnorm,
                                 i < n_blocks - 1,
                                 n_power_iter, 
-                                nonlin)  # split on all but last layer
+                                nonlin,
+                                original_resnet=self.original_resnet)  # split on all but last layer
             in_shape = block.out_shapes[-1]
             in_shapes.append(in_shape)
             blocks.append(block)
@@ -422,7 +437,8 @@ class conv_iResNet(nn.Module):
                  n_power_iter=5,
                  block=conv_iresnet_block,
                  actnorm=True, learn_prior=True,
-                 nonlin="relu"):
+                 nonlin="relu", 
+                 original_resnet=0):
         super(conv_iResNet, self).__init__()
         assert len(nBlocks) == len(nStrides) == len(nChannels)
         assert init_ds in (1, 2), "can only squeeze by 2"
@@ -435,18 +451,17 @@ class conv_iResNet(nn.Module):
         self.numTraceSamples = numTraceSamples if density_estimation else 0
         self.numSeriesTerms = numSeriesTerms if density_estimation else 0
         self.n_power_iter = n_power_iter
+        self.orignial_resnet=original_resnet
 
         print('')
         print(' == Building iResNet %d == ' % (sum(nBlocks) * 3 + 1))
         self.init_squeeze = Squeeze(self.init_ds)
         self.inj_pad = injective_pad(inj_pad)
         if self.init_ds == 2:
-           in_shape = downsample_shape(in_shape)
+            in_shape = downsample_shape(in_shape)
         in_shape = (in_shape[0] + inj_pad, in_shape[1], in_shape[2])  # adjust channels
 
-        self.stack, self.in_shapes, self.final_shape = self._make_stack(nChannels, nBlocks, nStrides,
-                                                                        in_shape, coeff, block,
-                                                                        actnorm, n_power_iter, nonlin)
+        self.stack, self.in_shapes, self.final_shape = self._make_stack(nChannels, nBlocks, nStrides, in_shape, coeff, block, actnorm, n_power_iter, nonlin)
 
         # make prior distribution
         self._make_prior(learn_prior)
@@ -483,6 +498,12 @@ class conv_iResNet(nn.Module):
         """ Create stack of iresnet blocks """
         block_list = nn.ModuleList()
         in_shapes = []
+        
+        if self.orignial_resnet == 1:
+            print("Construting original Resnet.")
+        else:
+            print("Constructing iResnet.")
+            
         for i, (int_dim, stride, blocks) in enumerate(zip(nChannels, nStrides, nBlocks)):
             for j in range(blocks):
                 in_shapes.append(in_shape)
@@ -494,7 +515,8 @@ class conv_iResNet(nn.Module):
                                         coeff=coeff,
                                         actnorm=actnorm,
                                         n_power_iter=n_power_iter,
-                                        nonlin=nonlin))
+                                        nonlin=nonlin,
+                                        original_resnet=self.orignial_resnet))
                 if stride == 2 and j == 0:
                     in_shape = downsample_shape(in_shape)
 
@@ -515,25 +537,25 @@ class conv_iResNet(nn.Module):
         print(len(self.in_shapes))
         svs = [] 
         for param in params:
-          input_shape = tuple(self.in_shapes[j])
-          # get unscaled parameters from state dict
-          convKernel_unscaled = self.state_dict()[param].cpu().numpy()
-          # get scaling by spectral norm
-          sigma = self.state_dict()[param[:-5] + '_sigma'].cpu().numpy()
-          convKernel = convKernel_unscaled / sigma
-          # compute singular values
-          input_shape = input_shape[1:]
-          fft_coeff = np.fft.fft2(convKernel, input_shape, axes=[2, 3])
-          t_fft_coeff = np.transpose(fft_coeff)
-          D = np.linalg.svd(t_fft_coeff, compute_uv=False, full_matrices=False)
-          Dflat = np.sort(D.flatten())[::-1] 
-          print("Layer "+str(j)+" Singular Value "+str(Dflat[0]))
-          svs.append(Dflat[0])
-          if i == 2:
-            i = 0
-            j+= 1
-          else:
-            i+=1
+            input_shape = tuple(self.in_shapes[j])
+            # get unscaled parameters from state dict
+            convKernel_unscaled = self.state_dict()[param].cpu().numpy()
+            # get scaling by spectral norm
+            sigma = self.state_dict()[param[:-5] + '_sigma'].cpu().numpy()
+            convKernel = convKernel_unscaled / sigma
+            # compute singular values
+            input_shape = input_shape[1:]
+            fft_coeff = np.fft.fft2(convKernel, input_shape, axes=[2, 3])
+            t_fft_coeff = np.transpose(fft_coeff)
+            D = np.linalg.svd(t_fft_coeff, compute_uv=False, full_matrices=False)
+            Dflat = np.sort(D.flatten())[::-1] 
+            print("Layer "+str(j)+" Singular Value "+str(Dflat[0]))
+            svs.append(Dflat[0])
+            if i == 2:
+                i = 0
+                j+= 1
+            else:
+                i+=1
         return svs
 
     def forward(self, x, ignore_logdet=False):
